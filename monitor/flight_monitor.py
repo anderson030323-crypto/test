@@ -479,6 +479,8 @@ def main() -> int:
     today_best: dict[str, Fare] = {}
     # cabin -> airline label -> cheapest fare across all date pairs
     by_airline: dict[str, dict[str, Fare]] = {cabin: {} for cabin in CABINS}
+    # cabin -> (dep, ret) -> airline label -> cheapest fare for that pair
+    by_pair: dict[str, dict[tuple[str, str | None], dict[str, Fare]]] = {cabin: {} for cabin in CABINS}
     for cabin in CABINS:
         for dep, ret in dates:
             results = search_google_flights(cabin, dep, ret)
@@ -490,10 +492,13 @@ def main() -> int:
             )
             if fare and (cabin not in today_best or fare.price < today_best[cabin].price):
                 today_best[cabin] = fare
+            pair_best = by_pair[cabin].setdefault((dep, ret), {})
             for f in fares:
                 label = "/".join(f.carriers) or "未知航空"
                 if label not in by_airline[cabin] or f.price < by_airline[cabin][label].price:
                     by_airline[cabin][label] = f
+                if label not in pair_best or f.price < pair_best[label].price:
+                    pair_best[label] = f
             time.sleep(1.5)  # be gentle: avoid Google rate limiting
         if cabin in today_best:
             print("  " + today_best[cabin].summary())
@@ -577,6 +582,26 @@ def main() -> int:
         missing = [AIRLINE_NAMES.get(c, c) for c in AIRLINES if not any(AIRLINE_NAMES.get(c, c) in k for k in by_airline[cabin])]
         if missing:
             lines.append(f"    - 無報價：{'、'.join(missing)}")
+
+    # Per date-pair breakdown (one compact line per pair).
+    if len(dates) > 1:
+        lines += ["", "各日期組合明細（各航空最低，括號為去程轉機次數）："]
+        for cabin in CABINS:
+            pairs = by_pair[cabin]
+            if not any(pairs.values()):
+                continue
+            lines.append(f"  {CABINS[cabin]}：")
+            for dep, ret in dates:
+                entries = sorted(pairs.get((dep, ret), {}).values(), key=lambda f: f.price)
+                label = f"{dep[5:].replace('-', '/')}→{ret[5:].replace('-', '/')}" if ret else dep
+                if not entries:
+                    lines.append(f"    {label}：目標航空無報價")
+                    continue
+                cells = [
+                    f"{'/'.join(f.carriers)} {f.price:,.0f}" + ("" if f.stops_outbound == 0 else f"（轉{f.stops_outbound}）")
+                    for f in entries
+                ]
+                lines.append(f"    {label}：" + "｜".join(cells))
     lines += ["", f"資料來源：Google Flights（{len(dates)} 組日期，每艙等取目標航空最低）"]
     report = "\n".join(lines)
     print("\n" + report)
