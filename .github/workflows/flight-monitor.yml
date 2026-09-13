@@ -44,9 +44,11 @@ jobs:
           DESTINATION: ${{ vars.DESTINATION || 'DPS' }}
           CURRENCY: ${{ vars.CURRENCY || 'TWD' }}
           ADULTS: ${{ vars.ADULTS || '1' }}
+          DEPARTURE_DATES: ${{ vars.DEPARTURE_DATES || '2027-02-02,2027-02-03' }}
+          RETURN_DATES: ${{ vars.RETURN_DATES || '2027-02-08,2027-02-09' }}
+          AIRLINES: ${{ vars.AIRLINES || 'BR,CI,CX,JX,EK' }}
           TRIP_NIGHTS: ${{ vars.TRIP_NIGHTS || '5' }}
           DAYS_AHEAD: ${{ vars.DAYS_AHEAD || '30,45,60,90' }}
-          DEPARTURE_DATES: ${{ vars.DEPARTURE_DATES || '' }}
           NOTIFY_ALWAYS: ${{ inputs.notify_always || vars.NOTIFY_ALWAYS || 'false' }}
           # --- notifications ---
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

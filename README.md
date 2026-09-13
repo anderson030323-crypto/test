@@ -8,7 +8,9 @@
 
 1. `.github/workflows/flight-monitor.yml` 依排程（`0 1 * * *` UTC = 09:00 台北）執行。
 2. `monitor/flight_monitor.py` 透過 [fast-flights](https://github.com/AWeirdDev/flights) 直接查詢 **Google Flights**
-   （免費、不需要 API key），取預設 **30 / 45 / 60 / 90 天後出發、5 晚來回** 的最低價（可調整）。
+   （免費、不需要 API key）。預設條件：
+   - 出發 **2027-02-02 或 02-03**，回程 **2027-02-08 或 02-09**（4 種組合都查，取最低）
+   - 只計入 **長榮 (BR)、華航 (CI)、國泰 (CX)、星宇 (JX)、阿聯酋 (EK)** 全程營運的航班
 3. 每次結果寫入 `data/price_history.json` 並自動 commit，作為歷史紀錄。
 4. 比較兩個基準：**上一次查價**（前一天的價格）與 **歷史最低價**。
    任一艙等低於其中一個 → 寄 Email 通知（信中會標示 📉 降價幅度 / 🔥 歷史新低）。
@@ -50,9 +52,11 @@
 
 | Variable | 預設 | 說明 |
 | --- | --- | --- |
-| `DAYS_AHEAD` | `30,45,60,90` | 取樣的出發日（距今天數，逗號分隔） |
-| `DEPARTURE_DATES` | 空 | 指定出發日期，例如 `2026-12-20,2026-12-27`（設定後會忽略 `DAYS_AHEAD`） |
-| `TRIP_NIGHTS` | `5` | 停留晚數；設 `0` 改查單程 |
+| `DEPARTURE_DATES` | `2027-02-02,2027-02-03` | 出發日期（逗號分隔） |
+| `RETURN_DATES` | `2027-02-08,2027-02-09` | 回程日期（逗號分隔），會和每個出發日配對 |
+| `AIRLINES` | `BR,CI,CX,JX,EK` | 目標航空公司 IATA 代碼；清空 = 不限航空 |
+| `TRIP_NIGHTS` | `5` | 清空 `RETURN_DATES` 時改用「出發日 + N 晚」；設 `0` 查單程 |
+| `DAYS_AHEAD` | `30,45,60,90` | 清空 `DEPARTURE_DATES` 時改用「距今 N 天」取樣 |
 | `MAX_STOPS` | 空（不限） | 最多轉機次數；`0` = 只看直飛 |
 | `ADULTS` | `1` | 人數 |
 | `CURRENCY` | `TWD` | 幣別 |

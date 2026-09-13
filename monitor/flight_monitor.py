@@ -33,11 +33,33 @@ ORIGIN = os.getenv("ORIGIN", "TPE")
 DESTINATION = os.getenv("DESTINATION", "DPS")
 CURRENCY = os.getenv("CURRENCY", "TWD")
 ADULTS = int(os.getenv("ADULTS", "1"))
-TRIP_NIGHTS = int(os.getenv("TRIP_NIGHTS", "5"))  # 0 = one-way
-# Departure dates to sample, expressed as "days from today".
-DAYS_AHEAD = [int(d) for d in os.getenv("DAYS_AHEAD", "30,45,60,90").split(",") if d.strip()]
-# Explicit dates override DAYS_AHEAD, e.g. "2026-12-20,2026-12-27"
-DEPARTURE_DATES = [d.strip() for d in os.getenv("DEPARTURE_DATES", "").split(",") if d.strip()]
+def _csv(name: str, default: str) -> list[str]:
+    return [x.strip() for x in os.getenv(name, default).split(",") if x.strip()]
+
+
+# Fixed travel dates: every departure date is paired with every return date.
+DEPARTURE_DATES = _csv("DEPARTURE_DATES", "2027-02-02,2027-02-03")
+RETURN_DATES = _csv("RETURN_DATES", "2027-02-08,2027-02-09")
+# Fallbacks when RETURN_DATES / DEPARTURE_DATES are cleared:
+TRIP_NIGHTS = int(os.getenv("TRIP_NIGHTS", "5"))  # nights when RETURN_DATES is empty (0 = one-way)
+DAYS_AHEAD = [int(d) for d in _csv("DAYS_AHEAD", "30,45,60,90")]  # days from today when DEPARTURE_DATES is empty
+# Only itineraries operated entirely by these airlines count. Empty = any airline.
+AIRLINES = [a.upper() for a in _csv("AIRLINES", "BR,CI,CX,JX,EK")]
+AIRLINE_NAMES = {
+    "BR": "長榮航空",
+    "CI": "中華航空",
+    "CX": "國泰航空",
+    "JX": "星宇航空",
+    "EK": "阿聯酋航空",
+}
+# Names Google may show (zh-TW / en) -> IATA code, used when page metadata lacks a code.
+AIRLINE_CODE_BY_NAME = {
+    "長榮航空": "BR", "EVA Air": "BR", "EVA": "BR",
+    "中華航空": "CI", "China Airlines": "CI",
+    "國泰航空": "CX", "Cathay Pacific": "CX",
+    "星宇航空": "JX", "STARLUX": "JX", "Starlux Airlines": "JX", "STARLUX Airlines": "JX",
+    "阿聯酋航空": "EK", "Emirates": "EK",
+}
 MAX_STOPS = os.getenv("MAX_STOPS", "")  # "" = any, "0" = direct only, "1" = up to 1 stop
 NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() in {"1", "true", "yes"}
 # Optional HTTP(S) proxy for reaching Google Flights.
@@ -116,9 +138,10 @@ def google_flights_url(cabin: str, dep: str, ret: str | None) -> str:
     """Human-clickable Google Flights URL for the same search."""
     from fast_flights import FlightQuery, Passengers, create_query
 
-    legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION)]
+    airlines = AIRLINES or None
+    legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION, airlines=airlines)]
     if ret:
-        legs.append(FlightQuery(date=ret, from_airport=DESTINATION, to_airport=ORIGIN))
+        legs.append(FlightQuery(date=ret, from_airport=DESTINATION, to_airport=ORIGIN, airlines=airlines))
     q = create_query(
         flights=legs,
         trip="round-trip" if ret else "one-way",
@@ -136,7 +159,8 @@ class Itinerary:
     """Minimal parsed Google Flights result (mirrors fast-flights' ``Flights``)."""
 
     price: float
-    airlines: list[str]
+    airlines: list[str]  # display names
+    codes: list[str]  # IATA codes (best effort)
     flights: list[Any]  # segments; only the count is used
 
 
@@ -174,11 +198,13 @@ def parse_results_html(html: str, tag: str = "page") -> list[Itinerary]:
         _dump_debug_html(html, f"{tag}-badjson")
         return []
 
-    # Airline code -> name lookup (best effort)
+    # Airline code <-> name lookup (best effort)
     names: dict[str, str] = {}
+    codes_by_name: dict[str, str] = dict(AIRLINE_CODE_BY_NAME)
     try:
         for code, name in payload[7][1][1]:
             names[str(code)] = str(name)
+            codes_by_name[str(name)] = str(code)
     except (IndexError, TypeError, ValueError):
         pass
 
@@ -198,24 +224,57 @@ def parse_results_html(html: str, tag: str = "page") -> list[Itinerary]:
             try:
                 flight = entry[0]
                 price = float(entry[1][0][1])
-                airlines = [names.get(str(a), str(a)) for a in (flight[1] or [])]
+                raw = [str(a) for a in (flight[1] or [])]
+                airlines = [names.get(a, a) for a in raw]
+                codes = [codes_by_name.get(a, a).upper() for a in raw]
                 segments = list(flight[2] or [])
             except (IndexError, TypeError, ValueError, KeyError):
                 continue  # unpriced or unexpected entry -> skip
             if price > 0:
-                results.append(Itinerary(price=price, airlines=airlines, flights=segments))
-    if not results and groups:
+                results.append(Itinerary(price=price, airlines=airlines, codes=codes, flights=segments))
+    if not results:
         _dump_debug_html(html, f"{tag}-empty")
+        _print_payload_diagnostics(payload, tag)
     return results
+
+
+def _shape(obj: Any, depth: int = 0) -> str:
+    """Compact description of nested list structure for log diagnostics."""
+    if isinstance(obj, list):
+        if depth >= 2:
+            return f"list[{len(obj)}]"
+        inner = ", ".join(_shape(x, depth + 1) for x in obj[:6])
+        more = f", …+{len(obj) - 6}" if len(obj) > 6 else ""
+        return f"[{inner}{more}]"
+    if obj is None:
+        return "None"
+    if isinstance(obj, str):
+        return f"str({len(obj)})"
+    return type(obj).__name__
+
+
+def _print_payload_diagnostics(payload: Any, tag: str) -> None:
+    print(f"  [diag] {tag}: 頁面無可用報價。payload 結構：{_shape(payload)}")
+    for idx in (2, 3):
+        try:
+            grp = payload[idx][0]
+        except (IndexError, TypeError):
+            continue
+        if isinstance(grp, list) and grp:
+            sample = json.dumps(grp[0], ensure_ascii=False)
+            print(f"  [diag] payload[{idx}][0] 有 {len(grp)} 筆，第一筆前 400 字：{sample[:400]}")
+        else:
+            print(f"  [diag] payload[{idx}][0] = {_shape(grp)}")
 
 
 def search_google_flights(cabin: str, dep: str, ret: str | None) -> list[Any]:
     """Return parsed itineraries for one cabin / date pair."""
     from fast_flights import FlightQuery, Passengers, create_query, fetch_flights_html
 
-    legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION)]
+    airlines = AIRLINES or None
+    legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION, airlines=airlines)]
     if ret:
-        legs.append(FlightQuery(date=ret, from_airport=DESTINATION, to_airport=ORIGIN))
+        legs.append(FlightQuery(date=ret, from_airport=DESTINATION, to_airport=ORIGIN, airlines=airlines))
     query = create_query(
         flights=legs,
         trip="round-trip" if ret else "one-way",
@@ -251,6 +310,7 @@ def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> 
     round-trip total, so ``price`` is already the total fare.
     """
     best: Fare | None = None
+    wanted = set(AIRLINES)
     for item in results:
         try:
             price = float(item.price)
@@ -258,6 +318,9 @@ def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> 
             continue
         if price <= 0:
             continue
+        codes = [c.upper() for c in (getattr(item, "codes", None) or [])]
+        if wanted and (not codes or any(c not in wanted for c in codes)):
+            continue  # operated (partly) by an airline outside the target list
         segments = list(getattr(item, "flights", []) or [])
         carriers = []
         for name in getattr(item, "airlines", []) or []:
@@ -284,11 +347,25 @@ def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> 
 # --------------------------------------------------------------------------- #
 
 
+def criteria_fingerprint() -> str:
+    """Identifies the search criteria; when it changes, old prices are not comparable."""
+    dates = ";".join(f"{d}>{r or ''}" for d, r in candidate_dates()) if (DEPARTURE_DATES and RETURN_DATES) else (
+        f"nights={TRIP_NIGHTS};ahead={','.join(map(str, DAYS_AHEAD))}" if not DEPARTURE_DATES else f"deps={','.join(DEPARTURE_DATES)};nights={TRIP_NIGHTS}"
+    )
+    return f"{ORIGIN}-{DESTINATION}|{dates}|airlines={','.join(AIRLINES)}|adults={ADULTS}|stops={MAX_STOPS}|{CURRENCY}"
+
+
 def load_history() -> dict[str, Any]:
-    if HISTORY_PATH.exists():
-        with HISTORY_PATH.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    return {"route": f"{ORIGIN}-{DESTINATION}", "lowest": {}, "runs": []}
+    fresh = {"route": f"{ORIGIN}-{DESTINATION}", "criteria": criteria_fingerprint(), "lowest": {}, "runs": []}
+    if not HISTORY_PATH.exists():
+        return fresh
+    with HISTORY_PATH.open(encoding="utf-8") as fh:
+        history = json.load(fh)
+    if history.get("criteria") != fresh["criteria"]:
+        print("搜尋條件已變更，歷史最低價重新計算。")
+        fresh["previous_criteria"] = history.get("criteria")
+        return fresh
+    return history
 
 
 def save_history(history: dict[str, Any]) -> None:
@@ -366,14 +443,23 @@ def write_step_summary(markdown: str) -> None:
 
 
 def candidate_dates() -> list[tuple[str, str | None]]:
+    """(departure, return) pairs to search.
+
+    Fixed DEPARTURE_DATES x RETURN_DATES when both are set; otherwise fall back
+    to DEPARTURE_DATES + TRIP_NIGHTS, or to DAYS_AHEAD from today.
+    """
     today = date.today()
     deps = DEPARTURE_DATES or [(today + timedelta(days=n)).isoformat() for n in DAYS_AHEAD]
     out: list[tuple[str, str | None]] = []
     for dep in deps:
-        ret = None
-        if TRIP_NIGHTS > 0:
-            ret = (date.fromisoformat(dep) + timedelta(days=TRIP_NIGHTS)).isoformat()
-        out.append((dep, ret))
+        if RETURN_DATES:
+            for ret in RETURN_DATES:
+                if date.fromisoformat(ret) > date.fromisoformat(dep):
+                    out.append((dep, ret))
+        elif TRIP_NIGHTS > 0:
+            out.append((dep, (date.fromisoformat(dep) + timedelta(days=TRIP_NIGHTS)).isoformat()))
+        else:
+            out.append((dep, None))
     return out
 
 
@@ -381,14 +467,19 @@ def main() -> int:
     now = datetime.now(TAIPEI_TZ)
     print(f"=== {ORIGIN} -> {DESTINATION} fare check @ {now:%Y-%m-%d %H:%M} (Asia/Taipei) ===")
     dates = candidate_dates()
-    print(f"Sampling {len(dates)} departure date(s): {', '.join(d for d, _ in dates)}")
+    print(f"Searching {len(dates)} date pair(s): " + ", ".join(f"{d}→{r}" if r else d for d, r in dates))
+    if AIRLINES:
+        print("Airlines: " + ", ".join(f"{c}({AIRLINE_NAMES.get(c, c)})" for c in AIRLINES))
 
     today_best: dict[str, Fare] = {}
     for cabin in CABINS:
         for dep, ret in dates:
             results = search_google_flights(cabin, dep, ret)
             fare = cheapest_fare(results, cabin, dep, ret)
-            print(f"    {CABINS[cabin]} {dep}: {len(results)} 筆" + (f"，最低 {fare.price:,.0f}" if fare else ""))
+            print(
+                f"    {CABINS[cabin]} {dep}→{ret}: {len(results)} 筆"
+                + (f"，目標航空最低 {fare.price:,.0f}（{'/'.join(fare.carriers)}）" if fare else "，目標航空無報價")
+            )
             if fare and (cabin not in today_best or fare.price < today_best[cabin].price):
                 today_best[cabin] = fare
             time.sleep(1.5)  # be gentle: avoid Google rate limiting
@@ -429,10 +520,18 @@ def main() -> int:
     save_history(history)
 
     # Build report
-    lines = [f"📅 {now:%Y-%m-%d} 台北(TPE) → 峇里島(DPS) 機票價格", ""]
+    lines = [f"📅 {now:%Y-%m-%d} 台北(TPE) → 峇里島(DPS) 機票價格"]
+    lines.append(
+        "條件：" + " 或 ".join(DEPARTURE_DATES) + " 出發，" + " 或 ".join(RETURN_DATES) + " 回程"
+        if DEPARTURE_DATES and RETURN_DATES
+        else "條件：" + "、".join(f"{d}→{r}" if r else d for d, r in dates)
+    )
+    if AIRLINES:
+        lines.append("航空公司：" + "、".join(AIRLINE_NAMES.get(c, c) for c in AIRLINES))
+    lines.append("")
     for cabin in CABINS:
         if cabin not in today_best:
-            lines.append(f"• {CABINS[cabin]}：今日查無報價")
+            lines.append(f"• {CABINS[cabin]}：今日目標航空無報價")
             continue
         fare = today_best[cabin]
         tags = []
@@ -449,7 +548,7 @@ def main() -> int:
         if last is not None and cabin not in drops:
             lines.append(f"   （上次查價 {fare.currency} {last:,.0f}）")
         lines.append(f"   查看/訂票：{google_flights_url(cabin, fare.departure_date, fare.return_date)}")
-    lines += ["", f"資料來源：Google Flights（{len(dates)} 個出發日取樣，每艙等取最低）"]
+    lines += ["", f"資料來源：Google Flights（{len(dates)} 組日期，每艙等取目標航空最低）"]
     report = "\n".join(lines)
     print("\n" + report)
 
