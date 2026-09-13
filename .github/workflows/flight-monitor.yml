@@ -33,6 +33,12 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Install CJK font for the chart
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk > /dev/null
+          rm -rf ~/.cache/matplotlib
+
       - name: Check fares
         env:
           # --- search settings (override via repo Variables) ---
@@ -77,12 +83,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/price_history.json
+          git add data/price_history.json data/prices.csv charts/
           if git diff --cached --quiet; then
             echo "No history changes."
             exit 0
           fi
-          git commit -m "chore: record fares $(TZ=Asia/Taipei date +%F)"
+          git commit -m "chore: record fares and update chart $(TZ=Asia/Taipei date +%F)"
           # GitHub occasionally rejects a push transiently; retry a few times.
           for i in 1 2 3 4; do
             git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true

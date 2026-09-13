@@ -4,6 +4,14 @@
 比較 **經濟艙、豪華經濟艙、商務艙** 三種艙等的最低價，只要任一艙等價格
 **低於上一次查價** 或 **低於歷史最低價**，就寄 Email 到 `anderson030323@gmail.com` 通知你。
 
+## 📈 每日價格走勢
+
+![價格走勢圖](charts/price_trend.png)
+
+每天查價後自動更新；每家航空一條線，紅圈為監控以來的歷史最低。
+原始資料：[`data/price_history.json`](data/price_history.json)（完整 JSON）與
+[`data/prices.csv`](data/prices.csv)（每日 × 艙等 × 航空 的表格，可直接用 Excel 開）。
+
 ## 運作方式
 
 1. `.github/workflows/flight-monitor.yml` 依排程（`0 1 * * *` UTC = 09:00 台北）執行。
@@ -11,7 +19,8 @@
    （免費、不需要 API key）。預設條件：
    - 出發 **2027-02-02 或 02-03**，回程 **2027-02-08 或 02-09**（4 種組合都查，取最低）
    - 只計入 **長榮 (BR)、華航 (CI)、國泰 (CX)、星宇 (JX)、阿聯酋 (EK)** 全程營運的航班
-3. 每次結果寫入 `data/price_history.json` 並自動 commit，作為歷史紀錄。
+3. 每次結果寫入 `data/price_history.json` 與 `data/prices.csv`，並由 `monitor/plot_history.py`
+   重繪 `charts/price_trend.png`，三者一起自動 commit。走勢圖也會內嵌在通知信裡。
 4. 比較兩個基準：**上一次查價**（前一天的價格）與 **歷史最低價**。
    任一艙等低於其中一個 → 寄 Email 通知（信中會標示 📉 降價幅度 / 🔥 歷史新低）。
    Email 沒設定或寄送失敗時，改開 GitHub Issue 當備援。

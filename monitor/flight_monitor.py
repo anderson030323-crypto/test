@@ -83,6 +83,12 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 NOTIFY_EMAIL_TO = os.getenv("NOTIFY_EMAIL_TO", "anderson030323@gmail.com")
 
 HISTORY_PATH = Path(os.getenv("HISTORY_PATH", "data/price_history.json"))
+CSV_PATH = Path(os.getenv("CSV_PATH", "data/prices.csv"))
+CHART_PATH = Path(os.getenv("CHART_PATH", "charts/price_trend.png"))
+GITHUB_REF_NAME = os.getenv("GITHUB_REF_NAME", "")
+
+# Make sibling modules (plot_history) importable when run as a script.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 CABINS = {
     "ECONOMY": "經濟艙",
@@ -380,6 +386,22 @@ def save_history(history: dict[str, Any]) -> None:
         fh.write("\n")
 
 
+def append_csv(now: datetime, by_airline: dict[str, dict[str, "Fare"]]) -> None:
+    """Flat, spreadsheet-friendly log: one row per cabin x airline per run."""
+    import csv
+
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not CSV_PATH.exists()
+    with CSV_PATH.open("a", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        if new_file:
+            w.writerow(["date", "checked_at", "cabin", "airline", "departure", "return", "stops_outbound", "currency", "price"])
+        for cabin, fares in by_airline.items():
+            for label, f in sorted(fares.items(), key=lambda kv: kv[1].price):
+                w.writerow([now.date().isoformat(), now.isoformat(timespec="seconds"), CABINS[cabin], label,
+                            f.departure_date, f.return_date or "", f.stops_outbound, f.currency, f"{f.price:.0f}"])
+
+
 # --------------------------------------------------------------------------- #
 # Notifications
 # --------------------------------------------------------------------------- #
@@ -417,17 +439,18 @@ def notify_telegram(text: str) -> bool:
     return ok
 
 
-def report_to_html(report: str, alert: bool) -> str:
+def report_to_html(report: str, alert: bool, chart_cid: str | None = None) -> str:
     """Render the plain-text report as HTML with loud highlighting on price drops."""
     import html as _html
 
     out: list[str] = []
     for raw in report.split("\n"):
         line = _html.escape(raw)
-        # Make the booking URLs clickable.
+        # Make URLs clickable.
         if "https://" in raw:
             url = raw[raw.index("https://"):].strip()
-            line = line.replace(_html.escape(url), f'<a href="{_html.escape(url)}">Google Flights 連結</a>')
+            text = "Google Flights 連結" if "google.com" in url else "開啟"
+            line = line.replace(_html.escape(url), f'<a href="{_html.escape(url)}">{text}</a>')
         if raw.startswith("═"):
             continue  # the HTML banner box replaces the text rule
         if "歷史新低" in raw or "價格下跌通知" in raw or raw.startswith("  【"):
@@ -445,22 +468,38 @@ def report_to_html(report: str, alert: bool) -> str:
             '<div style="background:#c00000;color:#fff;font-size:1.6em;font-weight:bold;'
             'padding:14px 18px;margin-bottom:14px;border-radius:6px">🔥 機票降價了！請看下方紅色標記</div>'
         )
+    chart = ""
+    if chart_cid:
+        chart = (
+            '<div style="margin:16px 0 6px;font-weight:bold">📈 每日價格走勢</div>'
+            f'<img src="cid:{chart_cid}" alt="價格走勢圖" style="max-width:100%;border:1px solid #e1e0d9;border-radius:6px">'
+        )
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Noto Sans TC,sans-serif;'
         'font-size:14px;line-height:1.6;white-space:pre-wrap;max-width:900px">'
-        f"{banner}{''.join(out)}</div>"
+        f"{banner}{''.join(out)}{chart}</div>"
     )
 
 
-def notify_email(subject: str, text: str, html: str | None = None) -> bool:
+def notify_email(subject: str, text: str, html: str | None = None, image_path: Path | None = None) -> bool:
     if not (SMTP_HOST and SMTP_USER and SMTP_PASSWORD and NOTIFY_EMAIL_TO):
         return False
     if html:
+        from email.mime.image import MIMEImage
         from email.mime.multipart import MIMEMultipart
 
-        msg: Any = MIMEMultipart("alternative")
-        msg.attach(MIMEText(text, "plain", "utf-8"))
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(text, "plain", "utf-8"))
+        alt.attach(MIMEText(html, "html", "utf-8"))
+        if image_path and image_path.exists():
+            msg: Any = MIMEMultipart("related")
+            msg.attach(alt)
+            img = MIMEImage(image_path.read_bytes(), _subtype="png")
+            img.add_header("Content-ID", "<trend>")
+            img.add_header("Content-Disposition", "inline", filename=image_path.name)
+            msg.attach(img)
+        else:
+            msg = alt
     else:
         msg = MIMEText(text, "plain", "utf-8")
     msg["Subject"] = subject
@@ -573,10 +612,23 @@ def main() -> int:
             "date": now.date().isoformat(),
             "checked_at": now.isoformat(timespec="seconds"),
             "prices": {cabin: asdict(f) for cabin, f in today_best.items()},
+            # Per-airline cheapest fares, so the trend chart can draw one line per airline.
+            "by_airline": {cabin: {label: asdict(f) for label, f in fares.items()} for cabin, fares in by_airline.items() if fares},
         }
     )
     history["runs"] = history["runs"][-365:]
     save_history(history)
+    append_csv(now, by_airline)
+
+    chart_ok = False
+    try:
+        from plot_history import draw as draw_chart  # same directory
+
+        note = f"（{' / '.join(d[5:] for d in DEPARTURE_DATES)} 出發，{' / '.join(r[5:] for r in RETURN_DATES)} 回程）" if DEPARTURE_DATES and RETURN_DATES else ""
+        chart_ok = draw_chart(history, CHART_PATH, currency=CURRENCY, title_note=note)
+        print(f"走勢圖已更新：{CHART_PATH}" if chart_ok else "走勢圖：尚無資料")
+    except Exception as exc:  # charting must never block the alert
+        print(f"[warn] 走勢圖產生失敗：{type(exc).__name__}: {exc}")
 
     # Build report
     lines = [f"📅 {now:%Y-%m-%d} 台北(TPE) → 峇里島(DPS) 機票價格"]
@@ -665,6 +717,10 @@ def main() -> int:
                     cells.append(cell)
                 lines.append(f"    {label}：" + "｜".join(cells))
     lines += ["", f"資料來源：Google Flights（{len(dates)} 組日期，每艙等取目標航空最低）"]
+    if chart_ok and GITHUB_REPOSITORY:
+        ref = GITHUB_REF_NAME or "main"
+        lines.append(f"📈 每日價格走勢圖：https://github.com/{GITHUB_REPOSITORY}/blob/{ref}/{CHART_PATH.as_posix()}")
+        lines.append(f"📄 完整價格紀錄（CSV）：https://github.com/{GITHUB_REPOSITORY}/blob/{ref}/{CSV_PATH.as_posix()}")
     report = "\n".join(lines)
     print("\n" + report)
 
@@ -678,7 +734,11 @@ def main() -> int:
             title = f"{kind}｜台北→峇里島 {'、'.join(parts)}（{now:%m/%d}）"
         else:
             title = f"✈️ 台北→峇里島 每日機票價格（{now:%m/%d}）"
-        email_ok = notify_email(title, report, html=report_to_html(report, alert=bool(alert_cabins)))
+        email_ok = notify_email(
+            title, report,
+            html=report_to_html(report, alert=bool(alert_cabins), chart_cid="trend" if chart_ok else None),
+            image_path=CHART_PATH if chart_ok else None,
+        )
         telegram_ok = notify_telegram(f"{title}\n\n{report}")
         # GitHub Issue is the fallback so an alert is never silently lost.
         issue_ok = notify_github_issue(title, report) if not email_ok else False
