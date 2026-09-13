@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""Daily TPE -> DPS (Taipei -> Bali) fare monitor.
+
+Queries the Amadeus Flight Offers Search API for the cheapest round-trip fare
+in three cabins (Economy / Premium Economy / Business) across a set of
+candidate departure dates, records the result in ``data/price_history.json``
+and sends a notification whenever a cabin hits a new all-time low.
+
+Configuration is via environment variables (see README.md).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import smtplib
+import sys
+import time
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta, timezone
+from email.mime.text import MIMEText
+from pathlib import Path
+from typing import Any
+
+import requests
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+ORIGIN = os.getenv("ORIGIN", "TPE")
+DESTINATION = os.getenv("DESTINATION", "DPS")
+CURRENCY = os.getenv("CURRENCY", "TWD")
+ADULTS = int(os.getenv("ADULTS", "1"))
+TRIP_NIGHTS = int(os.getenv("TRIP_NIGHTS", "5"))  # 0 = one-way
+# Departure dates to sample, expressed as "days from today".
+DAYS_AHEAD = [int(d) for d in os.getenv("DAYS_AHEAD", "30,45,60,90").split(",") if d.strip()]
+# Explicit dates override DAYS_AHEAD, e.g. "2026-12-20,2026-12-27"
+DEPARTURE_DATES = [d.strip() for d in os.getenv("DEPARTURE_DATES", "").split(",") if d.strip()]
+MAX_OFFERS = int(os.getenv("MAX_OFFERS", "20"))
+NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() in {"1", "true", "yes"}
+
+AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID", "")
+AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET", "")
+AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")  # "test" or "production"
+AMADEUS_BASE = os.getenv(
+    "AMADEUS_BASE_URL",
+    "https://api.amadeus.com" if AMADEUS_ENV == "production" else "https://test.api.amadeus.com",
+)
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
+GITHUB_STEP_SUMMARY = os.getenv("GITHUB_STEP_SUMMARY", "")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+NOTIFY_EMAIL_TO = os.getenv("NOTIFY_EMAIL_TO", "")
+
+HISTORY_PATH = Path(os.getenv("HISTORY_PATH", "data/price_history.json"))
+
+CABINS = {
+    "ECONOMY": "經濟艙",
+    "PREMIUM_ECONOMY": "豪華經濟艙",
+    "BUSINESS": "商務艙",
+}
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+
+# --------------------------------------------------------------------------- #
+# Data model
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class Fare:
+    cabin: str
+    price: float
+    currency: str
+    departure_date: str
+    return_date: str | None
+    carriers: list[str]
+    stops_outbound: int
+    stops_return: int | None
+    checked_at: str
+
+    def summary(self) -> str:
+        route = f"{self.departure_date} 出發"
+        if self.return_date:
+            route += f" / {self.return_date} 回程"
+        stops = f"去程轉機 {self.stops_outbound} 次"
+        if self.stops_return is not None:
+            stops += f"，回程轉機 {self.stops_return} 次"
+        return (
+            f"{CABINS[self.cabin]}：{self.currency} {self.price:,.0f}"
+            f"（{route}，{'/'.join(self.carriers)}，{stops}）"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Amadeus client
+# --------------------------------------------------------------------------- #
+
+
+class Amadeus:
+    def __init__(self, client_id: str, client_secret: str, base: str):
+        if not client_id or not client_secret:
+            sys.exit(
+                "缺少 AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET。"
+                "請到 https://developers.amadeus.com 申請免費 API key，並設定為 GitHub Secrets。"
+            )
+        self.base = base
+        self.session = requests.Session()
+        resp = self.session.post(
+            f"{base}/v1/security/oauth2/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        self.session.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+
+    def search(self, cabin: str, dep: str, ret: str | None) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "originLocationCode": ORIGIN,
+            "destinationLocationCode": DESTINATION,
+            "departureDate": dep,
+            "adults": ADULTS,
+            "travelClass": cabin,
+            "currencyCode": CURRENCY,
+            "max": MAX_OFFERS,
+        }
+        if ret:
+            params["returnDate"] = ret
+        for attempt in range(3):
+            resp = self.session.get(f"{self.base}/v2/shopping/flight-offers", params=params, timeout=60)
+            if resp.status_code == 429:  # rate limited (test env: ~1 req/100ms)
+                time.sleep(2 * (attempt + 1))
+                continue
+            if resp.status_code == 400:
+                # Typically "no results" for this cabin/date; treat as empty.
+                print(f"  [warn] 400 for {cabin} {dep}: {resp.text[:200]}")
+                return []
+            resp.raise_for_status()
+            return resp.json().get("data", [])
+        return []
+
+
+def cheapest_fare(offers: list[dict[str, Any]], cabin: str, dep: str, ret: str | None) -> Fare | None:
+    best: Fare | None = None
+    for offer in offers:
+        try:
+            price = float(offer["price"]["grandTotal"])
+        except (KeyError, ValueError):
+            continue
+        itineraries = offer.get("itineraries", [])
+        if not itineraries:
+            continue
+        carriers: list[str] = []
+        for it in itineraries:
+            for seg in it.get("segments", []):
+                code = seg.get("carrierCode")
+                if code and code not in carriers:
+                    carriers.append(code)
+        stops_out = max(len(itineraries[0].get("segments", [])) - 1, 0)
+        stops_ret = max(len(itineraries[1].get("segments", [])) - 1, 0) if len(itineraries) > 1 else None
+        fare = Fare(
+            cabin=cabin,
+            price=price,
+            currency=offer["price"].get("currency", CURRENCY),
+            departure_date=dep,
+            return_date=ret,
+            carriers=carriers,
+            stops_outbound=stops_out,
+            stops_return=stops_ret,
+            checked_at=datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
+        )
+        if best is None or fare.price < best.price:
+            best = fare
+    return best
+
+
+# --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
+
+
+def load_history() -> dict[str, Any]:
+    if HISTORY_PATH.exists():
+        with HISTORY_PATH.open(encoding="utf-8") as fh:
+            return json.load(fh)
+    return {"route": f"{ORIGIN}-{DESTINATION}", "lowest": {}, "runs": []}
+
+
+def save_history(history: dict[str, Any]) -> None:
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with HISTORY_PATH.open("w", encoding="utf-8") as fh:
+        json.dump(history, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+
+
+# --------------------------------------------------------------------------- #
+# Notifications
+# --------------------------------------------------------------------------- #
+
+
+def notify_github_issue(title: str, body: str) -> bool:
+    if not (GITHUB_TOKEN and GITHUB_REPOSITORY):
+        return False
+    resp = requests.post(
+        f"https://api.github.com/repos/{GITHUB_REPOSITORY}/issues",
+        headers={
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+        },
+        json={"title": title, "body": body, "labels": ["flight-deal"]},
+        timeout=30,
+    )
+    if resp.status_code >= 300:
+        print(f"  [warn] GitHub issue failed: {resp.status_code} {resp.text[:200]}")
+        return False
+    print(f"  GitHub issue created: {resp.json().get('html_url')}")
+    return True
+
+
+def notify_telegram(text: str) -> bool:
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        return False
+    resp = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
+        timeout=30,
+    )
+    ok = resp.status_code < 300
+    print("  Telegram sent" if ok else f"  [warn] Telegram failed: {resp.text[:200]}")
+    return ok
+
+
+def notify_email(subject: str, text: str) -> bool:
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASSWORD and NOTIFY_EMAIL_TO):
+        return False
+    msg = MIMEText(text, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_USER
+    msg["To"] = NOTIFY_EMAIL_TO
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USER, SMTP_PASSWORD)
+            smtp.send_message(msg)
+        print(f"  Email sent to {NOTIFY_EMAIL_TO}")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [warn] Email failed: {exc}")
+        return False
+
+
+def write_step_summary(markdown: str) -> None:
+    if GITHUB_STEP_SUMMARY:
+        with open(GITHUB_STEP_SUMMARY, "a", encoding="utf-8") as fh:
+            fh.write(markdown + "\n")
+
+
+# --------------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------------- #
+
+
+def candidate_dates() -> list[tuple[str, str | None]]:
+    today = date.today()
+    deps = DEPARTURE_DATES or [(today + timedelta(days=n)).isoformat() for n in DAYS_AHEAD]
+    out: list[tuple[str, str | None]] = []
+    for dep in deps:
+        ret = None
+        if TRIP_NIGHTS > 0:
+            ret = (date.fromisoformat(dep) + timedelta(days=TRIP_NIGHTS)).isoformat()
+        out.append((dep, ret))
+    return out
+
+
+def main() -> int:
+    now = datetime.now(TAIPEI_TZ)
+    print(f"=== {ORIGIN} -> {DESTINATION} fare check @ {now:%Y-%m-%d %H:%M} (Asia/Taipei) ===")
+    client = Amadeus(AMADEUS_CLIENT_ID, AMADEUS_CLIENT_SECRET, AMADEUS_BASE)
+    dates = candidate_dates()
+    print(f"Sampling {len(dates)} departure date(s): {', '.join(d for d, _ in dates)}")
+
+    today_best: dict[str, Fare] = {}
+    for cabin in CABINS:
+        for dep, ret in dates:
+            offers = client.search(cabin, dep, ret)
+            fare = cheapest_fare(offers, cabin, dep, ret)
+            if fare and (cabin not in today_best or fare.price < today_best[cabin].price):
+                today_best[cabin] = fare
+            time.sleep(0.3)  # be gentle with the API rate limit
+        if cabin in today_best:
+            print("  " + today_best[cabin].summary())
+        else:
+            print(f"  {CABINS[cabin]}：今日查無報價")
+
+    history = load_history()
+    new_lows: list[tuple[Fare, float | None]] = []
+    for cabin, fare in today_best.items():
+        prev = history["lowest"].get(cabin)
+        prev_price = float(prev["price"]) if prev else None
+        if prev_price is None or fare.price < prev_price:
+            new_lows.append((fare, prev_price))
+            history["lowest"][cabin] = asdict(fare)
+
+    history["runs"].append(
+        {
+            "date": now.date().isoformat(),
+            "checked_at": now.isoformat(timespec="seconds"),
+            "prices": {cabin: asdict(f) for cabin, f in today_best.items()},
+        }
+    )
+    history["runs"] = history["runs"][-365:]
+    save_history(history)
+
+    # Build report
+    lines = [f"📅 {now:%Y-%m-%d} 台北(TPE) → 峇里島(DPS) 機票價格", ""]
+    for cabin in CABINS:
+        if cabin in today_best:
+            low = history["lowest"].get(cabin, {})
+            tag = " 🔥 歷史新低！" if any(f.cabin == cabin for f, _ in new_lows) else ""
+            lines.append("• " + today_best[cabin].summary() + tag)
+            if low and not tag:
+                lines.append(f"   （歷史最低 {low['currency']} {float(low['price']):,.0f}，{low['checked_at'][:10]}）")
+        else:
+            lines.append(f"• {CABINS[cabin]}：今日查無報價")
+    report = "\n".join(lines)
+    print("\n" + report)
+
+    write_step_summary("## 今日查價結果\n\n```\n" + report + "\n```")
+
+    if new_lows or NOTIFY_ALWAYS:
+        if new_lows:
+            cabins_txt = "、".join(CABINS[f.cabin] for f, _ in new_lows)
+            title = f"✈️ 台北→峇里島 新低價：{cabins_txt}（{now:%m/%d}）"
+        else:
+            title = f"✈️ 台北→峇里島 每日機票價格（{now:%m/%d}）"
+        sent = [
+            notify_github_issue(title, report),
+            notify_telegram(f"{title}\n\n{report}"),
+            notify_email(title, report),
+        ]
+        if not any(sent):
+            print("[warn] 沒有任何通知管道成功送出，請檢查 secrets 設定。")
+    else:
+        print("\n今日沒有新低價，不發送通知。")
+
+    if not today_best:
+        print("[error] 三種艙等都查無報價，請檢查 API 設定或日期。")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

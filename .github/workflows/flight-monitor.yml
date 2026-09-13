@@ -1,0 +1,74 @@
+name: Daily TPE→DPS fare monitor
+
+on:
+  schedule:
+    # 09:00 Asia/Taipei (UTC+8) == 01:00 UTC, every day
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      notify_always:
+        description: "Send a notification even if there is no new low"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: flight-monitor
+  cancel-in-progress: false
+
+jobs:
+  check-fares:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Check fares
+        env:
+          # --- required ---
+          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
+          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
+          AMADEUS_ENV: ${{ vars.AMADEUS_ENV || 'test' }}
+          # --- search settings (override via repo Variables) ---
+          ORIGIN: ${{ vars.ORIGIN || 'TPE' }}
+          DESTINATION: ${{ vars.DESTINATION || 'DPS' }}
+          CURRENCY: ${{ vars.CURRENCY || 'TWD' }}
+          ADULTS: ${{ vars.ADULTS || '1' }}
+          TRIP_NIGHTS: ${{ vars.TRIP_NIGHTS || '5' }}
+          DAYS_AHEAD: ${{ vars.DAYS_AHEAD || '30,45,60,90' }}
+          DEPARTURE_DATES: ${{ vars.DEPARTURE_DATES || '' }}
+          NOTIFY_ALWAYS: ${{ inputs.notify_always || vars.NOTIFY_ALWAYS || 'false' }}
+          # --- notifications ---
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+        run: python monitor/flight_monitor.py
+
+      - name: Commit price history
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/price_history.json
+          if git diff --cached --quiet; then
+            echo "No history changes."
+          else
+            git commit -m "chore: record fares $(TZ=Asia/Taipei date +%F)"
+            git push
+          fi
