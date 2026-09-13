@@ -1,5 +1,65 @@
 {
   "route": "TPE-DPS",
-  "lowest": {},
-  "runs": []
+  "lowest": {
+    "ECONOMY": {
+      "cabin": "ECONOMY",
+      "price": 10545.0,
+      "currency": "TWD",
+      "departure_date": "2026-11-12",
+      "return_date": "2026-11-17",
+      "carriers": [
+        "酷航"
+      ],
+      "stops_outbound": 1,
+      "stops_return": null,
+      "checked_at": "2026-09-13T17:00:25+08:00"
+    },
+    "BUSINESS": {
+      "cabin": "BUSINESS",
+      "price": 31546.0,
+      "currency": "TWD",
+      "departure_date": "2026-10-28",
+      "return_date": "2026-11-02",
+      "carriers": [
+        "馬來西亞航空"
+      ],
+      "stops_outbound": 1,
+      "stops_return": null,
+      "checked_at": "2026-09-13T17:00:38+08:00"
+    }
+  },
+  "runs": [
+    {
+      "date": "2026-09-13",
+      "checked_at": "2026-09-13T17:00:21+08:00",
+      "prices": {
+        "ECONOMY": {
+          "cabin": "ECONOMY",
+          "price": 10545.0,
+          "currency": "TWD",
+          "departure_date": "2026-11-12",
+          "return_date": "2026-11-17",
+          "carriers": [
+            "酷航"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-09-13T17:00:25+08:00"
+        },
+        "BUSINESS": {
+          "cabin": "BUSINESS",
+          "price": 31546.0,
+          "currency": "TWD",
+          "departure_date": "2026-10-28",
+          "return_date": "2026-11-02",
+          "carriers": [
+            "馬來西亞航空"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-09-13T17:00:38+08:00"
+        }
+      }
+    }
+  ]
 }
