@@ -85,3 +85,6 @@ python monitor/flight_monitor.py
   程式會回報錯誤（Actions 會顯示紅色），此時更新 `fast-flights` 套件版本通常即可修復。
   若 runner 被 Google 暫時封鎖，可在 Secrets 設 `GOOGLE_FLIGHTS_PROXY` 走代理。
 - 通知信中每個艙等都附上對應的 Google Flights 連結，可直接點開確認並訂票。
+- 某艙等顯示「沒有報價」代表 Google Flights 在該日期、該航空公司下查無此艙等
+  （例如 2027/02 台北–峇里島目前查不到長榮／華航／國泰／星宇／阿聯酋的豪華經濟艙），
+  一旦航空公司開賣，隔天的查價就會自動抓到並通知。

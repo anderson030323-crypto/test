@@ -531,7 +531,7 @@ def main() -> int:
     lines.append("")
     for cabin in CABINS:
         if cabin not in today_best:
-            lines.append(f"• {CABINS[cabin]}：今日目標航空無報價")
+            lines.append(f"• {CABINS[cabin]}：Google Flights 目前沒有目標航空的{CABINS[cabin]}報價（該航線可能未提供此艙等）")
             continue
         fare = today_best[cabin]
         tags = []
