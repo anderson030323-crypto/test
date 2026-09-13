@@ -4,7 +4,7 @@
   "lowest": {
     "ECONOMY": {
       "cabin": "ECONOMY",
-      "price": 17776.0,
+      "price": 16776.0,
       "currency": "TWD",
       "departure_date": "2027-02-02",
       "return_date": "2027-02-08",
@@ -13,7 +13,7 @@
       ],
       "stops_outbound": 1,
       "stops_return": null,
-      "checked_at": "2026-09-13T17:03:44+08:00"
+      "checked_at": "2026-09-13T17:44:07+08:00"
     },
     "BUSINESS": {
       "cabin": "BUSINESS",
@@ -91,6 +91,38 @@
           "stops_outbound": 1,
           "stops_return": null,
           "checked_at": "2026-09-13T17:38:21+08:00"
+        }
+      }
+    },
+    {
+      "date": "2026-09-13",
+      "checked_at": "2026-09-13T17:44:06+08:00",
+      "prices": {
+        "ECONOMY": {
+          "cabin": "ECONOMY",
+          "price": 16776.0,
+          "currency": "TWD",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
+          "carriers": [
+            "國泰航空"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-09-13T17:44:07+08:00"
+        },
+        "BUSINESS": {
+          "cabin": "BUSINESS",
+          "price": 34400.0,
+          "currency": "TWD",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
+          "carriers": [
+            "國泰航空"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-09-13T17:44:22+08:00"
         }
       }
     }
