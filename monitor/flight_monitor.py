@@ -417,10 +417,52 @@ def notify_telegram(text: str) -> bool:
     return ok
 
 
-def notify_email(subject: str, text: str) -> bool:
+def report_to_html(report: str, alert: bool) -> str:
+    """Render the plain-text report as HTML with loud highlighting on price drops."""
+    import html as _html
+
+    out: list[str] = []
+    for raw in report.split("\n"):
+        line = _html.escape(raw)
+        # Make the booking URLs clickable.
+        if "https://" in raw:
+            url = raw[raw.index("https://"):].strip()
+            line = line.replace(_html.escape(url), f'<a href="{_html.escape(url)}">Google Flights 連結</a>')
+        if raw.startswith("═"):
+            continue  # the HTML banner box replaces the text rule
+        if "歷史新低" in raw or "價格下跌通知" in raw or raw.startswith("  【"):
+            line = f'<div style="background:#ffe9e9;color:#c00000;font-weight:bold;font-size:1.15em;padding:4px 8px;border-left:6px solid #c00000">{line}</div>'
+        elif "比上次便宜" in raw or "👉" in raw:
+            line = f'<div style="background:#fff6d5;font-weight:bold;padding:2px 8px">{line}</div>'
+        elif raw.startswith("各") or raw.startswith("📅"):
+            line = f'<div style="font-weight:bold;margin-top:10px">{line}</div>'
+        else:
+            line = f"<div>{line if line else '&nbsp;'}</div>"
+        out.append(line)
+    banner = ""
+    if alert:
+        banner = (
+            '<div style="background:#c00000;color:#fff;font-size:1.6em;font-weight:bold;'
+            'padding:14px 18px;margin-bottom:14px;border-radius:6px">🔥 機票降價了！請看下方紅色標記</div>'
+        )
+    return (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Noto Sans TC,sans-serif;'
+        'font-size:14px;line-height:1.6;white-space:pre-wrap;max-width:900px">'
+        f"{banner}{''.join(out)}</div>"
+    )
+
+
+def notify_email(subject: str, text: str, html: str | None = None) -> bool:
     if not (SMTP_HOST and SMTP_USER and SMTP_PASSWORD and NOTIFY_EMAIL_TO):
         return False
-    msg = MIMEText(text, "plain", "utf-8")
+    if html:
+        from email.mime.multipart import MIMEMultipart
+
+        msg: Any = MIMEMultipart("alternative")
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
+    else:
+        msg = MIMEText(text, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = SMTP_USER
     msg["To"] = NOTIFY_EMAIL_TO
@@ -546,6 +588,20 @@ def main() -> int:
     if AIRLINES:
         lines.append("航空公司：" + "、".join(AIRLINE_NAMES.get(c, c) for c in AIRLINES))
     lines.append("")
+
+    # Loud banner at the very top whenever something got cheaper.
+    if alert_cabins:
+        bar = "═" * 46
+        lines += [bar, "🔥🔥🔥  價格下跌通知  🔥🔥🔥"]
+        for cabin in alert_cabins:
+            f = today_best[cabin]
+            what = "【歷史新低】" if cabin in new_lows else "【比上次便宜】"
+            line = f"  {what} {CABINS[cabin]} {f.currency} {f.price:,.0f}  {'/'.join(f.carriers)}，{f.departure_date} → {f.return_date or '單程'}"
+            if cabin in drops:
+                line += f"（↓ {drops[cabin] - f.price:,.0f}，上次 {drops[cabin]:,.0f}）"
+            lines.append(line)
+        lines += [bar, ""]
+
     for cabin in CABINS:
         if cabin not in today_best:
             lines.append(f"• {CABINS[cabin]}：Google Flights 目前沒有目標航空的{CABINS[cabin]}報價（該航線可能未提供此艙等）")
@@ -553,11 +609,12 @@ def main() -> int:
         fare = today_best[cabin]
         tags = []
         if cabin in new_lows:
-            tags.append("🔥 歷史新低")
+            tags.append("🔥🔥🔥 歷史新低！")
         if cabin in drops:
             diff = drops[cabin] - fare.price
             tags.append(f"📉 比上次便宜 {fare.currency} {diff:,.0f}（上次 {drops[cabin]:,.0f}）")
-        lines.append("• " + fare.summary() + (("  " + "；".join(tags)) if tags else ""))
+        prefix = "👉 " if cabin in alert_cabins else "• "
+        lines.append(prefix + fare.summary() + (("  ◀◀ " + "；".join(tags)) if tags else ""))
         low = history["lowest"].get(cabin, {})
         if low and cabin not in new_lows:
             lines.append(f"   （歷史最低 {low['currency']} {float(low['price']):,.0f}，{low['checked_at'][:10]}）")
@@ -573,11 +630,13 @@ def main() -> int:
             lines.append(f"  {CABINS[cabin]}：目標航空皆無報價")
             continue
         lines.append(f"  {CABINS[cabin]}：")
-        for f in entries:
+        for i, f in enumerate(entries):
             stops = "直飛" if f.stops_outbound == 0 else f"轉機 {f.stops_outbound} 次"
+            mark = "👉 " if i == 0 else "- "
+            tail = "  ◀ 最低" if i == 0 else ""
             lines.append(
-                f"    - {'/'.join(f.carriers)}：{f.currency} {f.price:,.0f}"
-                f"（{f.departure_date} 出發 / {f.return_date} 回程，{stops}）"
+                f"    {mark}{'/'.join(f.carriers)}：{f.currency} {f.price:,.0f}"
+                f"（{f.departure_date} 出發 / {f.return_date} 回程，{stops}）{tail}"
             )
         missing = [AIRLINE_NAMES.get(c, c) for c in AIRLINES if not any(AIRLINE_NAMES.get(c, c) in k for k in by_airline[cabin])]
         if missing:
@@ -597,10 +656,13 @@ def main() -> int:
                 if not entries:
                     lines.append(f"    {label}：目標航空無報價")
                     continue
-                cells = [
-                    f"{'/'.join(f.carriers)} {f.price:,.0f}" + ("" if f.stops_outbound == 0 else f"（轉{f.stops_outbound}）")
-                    for f in entries
-                ]
+                best_price = today_best[cabin].price if cabin in today_best else None
+                cells = []
+                for f in entries:
+                    cell = f"{'/'.join(f.carriers)} {f.price:,.0f}" + ("" if f.stops_outbound == 0 else f"（轉{f.stops_outbound}）")
+                    if best_price is not None and f.price == best_price:
+                        cell = f"👉 {cell} ◀ 最低"
+                    cells.append(cell)
                 lines.append(f"    {label}：" + "｜".join(cells))
     lines += ["", f"資料來源：Google Flights（{len(dates)} 組日期，每艙等取目標航空最低）"]
     report = "\n".join(lines)
@@ -610,12 +672,13 @@ def main() -> int:
 
     if alert_cabins or NOTIFY_ALWAYS:
         if alert_cabins:
-            cabins_txt = "、".join(CABINS[c] for c in alert_cabins)
-            kind = "歷史新低" if any(c in new_lows for c in alert_cabins) else "降價"
-            title = f"✈️ 台北→峇里島 {kind}：{cabins_txt}（{now:%m/%d}）"
+            # Subject leads with the loudest fact: which cabin, how cheap.
+            parts = [f"{CABINS[c]} {today_best[c].price:,.0f}" for c in alert_cabins]
+            kind = "🔥🔥 歷史新低" if any(c in new_lows for c in alert_cabins) else "📉 降價"
+            title = f"{kind}｜台北→峇里島 {'、'.join(parts)}（{now:%m/%d}）"
         else:
             title = f"✈️ 台北→峇里島 每日機票價格（{now:%m/%d}）"
-        email_ok = notify_email(title, report)
+        email_ok = notify_email(title, report, html=report_to_html(report, alert=bool(alert_cabins)))
         telegram_ok = notify_telegram(f"{title}\n\n{report}")
         # GitHub Issue is the fallback so an alert is never silently lost.
         issue_ok = notify_github_issue(title, report) if not email_ok else False
