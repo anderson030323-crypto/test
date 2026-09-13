@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Daily TPE -> DPS (Taipei -> Bali) fare monitor.
 
-Queries the Amadeus Flight Offers Search API for the cheapest round-trip fare
-in three cabins (Economy / Premium Economy / Business) across a set of
-candidate departure dates, records the result in ``data/price_history.json``
-and sends a notification whenever a cabin hits a new all-time low.
+Queries Google Flights (via the ``fast-flights`` library, no API key needed)
+for the cheapest round-trip fare in three cabins (Economy / Premium Economy /
+Business) across a set of candidate departure dates, records the result in
+``data/price_history.json`` and sends a notification whenever a cabin is
+cheaper than the previous check or hits a new all-time low.
 
 Configuration is via environment variables (see README.md).
 """
@@ -37,16 +38,10 @@ TRIP_NIGHTS = int(os.getenv("TRIP_NIGHTS", "5"))  # 0 = one-way
 DAYS_AHEAD = [int(d) for d in os.getenv("DAYS_AHEAD", "30,45,60,90").split(",") if d.strip()]
 # Explicit dates override DAYS_AHEAD, e.g. "2026-12-20,2026-12-27"
 DEPARTURE_DATES = [d.strip() for d in os.getenv("DEPARTURE_DATES", "").split(",") if d.strip()]
-MAX_OFFERS = int(os.getenv("MAX_OFFERS", "20"))
+MAX_STOPS = os.getenv("MAX_STOPS", "")  # "" = any, "0" = direct only, "1" = up to 1 stop
 NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() in {"1", "true", "yes"}
-
-AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID", "")
-AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET", "")
-AMADEUS_ENV = os.getenv("AMADEUS_ENV", "test")  # "test" or "production"
-AMADEUS_BASE = os.getenv(
-    "AMADEUS_BASE_URL",
-    "https://api.amadeus.com" if AMADEUS_ENV == "production" else "https://test.api.amadeus.com",
-)
+# Optional HTTP(S) proxy for reaching Google Flights.
+GOOGLE_FLIGHTS_PROXY = os.getenv("GOOGLE_FLIGHTS_PROXY", "") or None
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
@@ -69,6 +64,12 @@ CABINS = {
     "ECONOMY": "經濟艙",
     "PREMIUM_ECONOMY": "豪華經濟艙",
     "BUSINESS": "商務艙",
+}
+# Our cabin keys -> fast-flights seat names
+SEAT_TYPES = {
+    "ECONOMY": "economy",
+    "PREMIUM_ECONOMY": "premium-economy",
+    "BUSINESS": "business",
 }
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
@@ -95,94 +96,96 @@ class Fare:
         route = f"{self.departure_date} 出發"
         if self.return_date:
             route += f" / {self.return_date} 回程"
-        stops = f"去程轉機 {self.stops_outbound} 次"
+        stops = "直飛" if self.stops_outbound == 0 else f"去程轉機 {self.stops_outbound} 次"
         if self.stops_return is not None:
             stops += f"，回程轉機 {self.stops_return} 次"
         return (
             f"{CABINS[self.cabin]}：{self.currency} {self.price:,.0f}"
-            f"（{route}，{'/'.join(self.carriers)}，{stops}）"
+            f"（{route}，{'/'.join(self.carriers) or '未知航空'}，{stops}）"
         )
 
 
 # --------------------------------------------------------------------------- #
-# Amadeus client
+# Google Flights (fast-flights) client
 # --------------------------------------------------------------------------- #
 
 
-class Amadeus:
-    def __init__(self, client_id: str, client_secret: str, base: str):
-        if not client_id or not client_secret:
-            sys.exit(
-                "缺少 AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET。"
-                "請到 https://developers.amadeus.com 申請免費 API key，並設定為 GitHub Secrets。"
-            )
-        self.base = base
-        self.session = requests.Session()
-        resp = self.session.post(
-            f"{base}/v1/security/oauth2/token",
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        self.session.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+def google_flights_url(cabin: str, dep: str, ret: str | None) -> str:
+    """Human-clickable Google Flights URL for the same search."""
+    from fast_flights import FlightQuery, Passengers, create_query
 
-    def search(self, cabin: str, dep: str, ret: str | None) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {
-            "originLocationCode": ORIGIN,
-            "destinationLocationCode": DESTINATION,
-            "departureDate": dep,
-            "adults": ADULTS,
-            "travelClass": cabin,
-            "currencyCode": CURRENCY,
-            "max": MAX_OFFERS,
-        }
-        if ret:
-            params["returnDate"] = ret
-        for attempt in range(3):
-            resp = self.session.get(f"{self.base}/v2/shopping/flight-offers", params=params, timeout=60)
-            if resp.status_code == 429:  # rate limited (test env: ~1 req/100ms)
-                time.sleep(2 * (attempt + 1))
-                continue
-            if resp.status_code == 400:
-                # Typically "no results" for this cabin/date; treat as empty.
-                print(f"  [warn] 400 for {cabin} {dep}: {resp.text[:200]}")
-                return []
-            resp.raise_for_status()
-            return resp.json().get("data", [])
-        return []
+    legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION)]
+    if ret:
+        legs.append(FlightQuery(date=ret, from_airport=DESTINATION, to_airport=ORIGIN))
+    q = create_query(
+        flights=legs,
+        trip="round-trip" if ret else "one-way",
+        seat=SEAT_TYPES[cabin],  # type: ignore[arg-type]
+        passengers=Passengers(adults=ADULTS),
+        language="zh-TW",
+        currency=CURRENCY,
+        max_stops=int(MAX_STOPS) if MAX_STOPS else None,
+    )
+    return q.url()
 
 
-def cheapest_fare(offers: list[dict[str, Any]], cabin: str, dep: str, ret: str | None) -> Fare | None:
-    best: Fare | None = None
-    for offer in offers:
+def search_google_flights(cabin: str, dep: str, ret: str | None) -> list[Any]:
+    """Return fast-flights ``Flights`` results for one cabin / date pair."""
+    from fast_flights import FlightQuery, FlightsNotFound, Passengers, create_query, get_flights
+
+    legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION)]
+    if ret:
+        legs.append(FlightQuery(date=ret, from_airport=DESTINATION, to_airport=ORIGIN))
+    query = create_query(
+        flights=legs,
+        trip="round-trip" if ret else "one-way",
+        seat=SEAT_TYPES[cabin],  # type: ignore[arg-type]
+        passengers=Passengers(adults=ADULTS),
+        language="zh-TW",
+        currency=CURRENCY,
+        max_stops=int(MAX_STOPS) if MAX_STOPS else None,
+    )
+    last_exc: Exception | None = None
+    for attempt in range(3):
         try:
-            price = float(offer["price"]["grandTotal"])
-        except (KeyError, ValueError):
+            return list(get_flights(query, proxy=GOOGLE_FLIGHTS_PROXY))
+        except FlightsNotFound:
+            return []
+        except Exception as exc:  # network / parse hiccup: retry with backoff
+            last_exc = exc
+            time.sleep(3 * (attempt + 1))
+    print(f"  [warn] Google Flights 查詢失敗 {cabin} {dep}: {last_exc}")
+    return []
+
+
+def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> Fare | None:
+    """Pick the cheapest itinerary out of fast-flights results.
+
+    For a round trip Google Flights lists outbound options priced as the full
+    round-trip total, so ``price`` is already the total fare.
+    """
+    best: Fare | None = None
+    for item in results:
+        try:
+            price = float(item.price)
+        except (TypeError, ValueError, AttributeError):
             continue
-        itineraries = offer.get("itineraries", [])
-        if not itineraries:
+        if price <= 0:
             continue
-        carriers: list[str] = []
-        for it in itineraries:
-            for seg in it.get("segments", []):
-                code = seg.get("carrierCode")
-                if code and code not in carriers:
-                    carriers.append(code)
-        stops_out = max(len(itineraries[0].get("segments", [])) - 1, 0)
-        stops_ret = max(len(itineraries[1].get("segments", [])) - 1, 0) if len(itineraries) > 1 else None
+        segments = list(getattr(item, "flights", []) or [])
+        carriers = []
+        for name in getattr(item, "airlines", []) or []:
+            if name and name not in carriers:
+                carriers.append(str(name))
         fare = Fare(
             cabin=cabin,
             price=price,
-            currency=offer["price"].get("currency", CURRENCY),
+            currency=CURRENCY,
             departure_date=dep,
             return_date=ret,
             carriers=carriers,
-            stops_outbound=stops_out,
-            stops_return=stops_ret,
+            stops_outbound=max(len(segments) - 1, 0),
+            stops_return=None,
             checked_at=datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
         )
         if best is None or fare.price < best.price:
@@ -291,18 +294,18 @@ def candidate_dates() -> list[tuple[str, str | None]]:
 def main() -> int:
     now = datetime.now(TAIPEI_TZ)
     print(f"=== {ORIGIN} -> {DESTINATION} fare check @ {now:%Y-%m-%d %H:%M} (Asia/Taipei) ===")
-    client = Amadeus(AMADEUS_CLIENT_ID, AMADEUS_CLIENT_SECRET, AMADEUS_BASE)
     dates = candidate_dates()
     print(f"Sampling {len(dates)} departure date(s): {', '.join(d for d, _ in dates)}")
 
     today_best: dict[str, Fare] = {}
     for cabin in CABINS:
         for dep, ret in dates:
-            offers = client.search(cabin, dep, ret)
-            fare = cheapest_fare(offers, cabin, dep, ret)
+            results = search_google_flights(cabin, dep, ret)
+            fare = cheapest_fare(results, cabin, dep, ret)
+            print(f"    {CABINS[cabin]} {dep}: {len(results)} 筆" + (f"，最低 {fare.price:,.0f}" if fare else ""))
             if fare and (cabin not in today_best or fare.price < today_best[cabin].price):
                 today_best[cabin] = fare
-            time.sleep(0.3)  # be gentle with the API rate limit
+            time.sleep(1.5)  # be gentle: avoid Google rate limiting
         if cabin in today_best:
             print("  " + today_best[cabin].summary())
         else:
@@ -359,6 +362,8 @@ def main() -> int:
         last = last_run_prices.get(cabin)
         if last is not None and cabin not in drops:
             lines.append(f"   （上次查價 {fare.currency} {last:,.0f}）")
+        lines.append(f"   查看/訂票：{google_flights_url(cabin, fare.departure_date, fare.return_date)}")
+    lines += ["", f"資料來源：Google Flights（{len(dates)} 個出發日取樣，每艙等取最低）"]
     report = "\n".join(lines)
     print("\n" + report)
 
@@ -381,7 +386,7 @@ def main() -> int:
         print("\n今日價格沒有低於上次查價或歷史最低，不發送通知。")
 
     if not today_best:
-        print("[error] 三種艙等都查無報價，請檢查 API 設定或日期。")
+        print("[error] 三種艙等都查無報價，可能是 Google Flights 暫時封鎖或頁面格式改變。")
         return 1
     return 0
 

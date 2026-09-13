@@ -35,11 +35,10 @@ jobs:
 
       - name: Check fares
         env:
-          # --- required ---
-          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
-          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
-          AMADEUS_ENV: ${{ vars.AMADEUS_ENV || 'test' }}
           # --- search settings (override via repo Variables) ---
+          # Prices come from Google Flights via fast-flights; no API key needed.
+          MAX_STOPS: ${{ vars.MAX_STOPS || '' }}
+          GOOGLE_FLIGHTS_PROXY: ${{ secrets.GOOGLE_FLIGHTS_PROXY }}
           ORIGIN: ${{ vars.ORIGIN || 'TPE' }}
           DESTINATION: ${{ vars.DESTINATION || 'DPS' }}
           CURRENCY: ${{ vars.CURRENCY || 'TWD' }}

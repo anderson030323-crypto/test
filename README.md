@@ -7,8 +7,8 @@
 ## 運作方式
 
 1. `.github/workflows/flight-monitor.yml` 依排程（`0 1 * * *` UTC = 09:00 台北）執行。
-2. `monitor/flight_monitor.py` 透過 [Amadeus Flight Offers Search API](https://developers.amadeus.com/self-service/category/flights/api-doc/flight-offers-search)
-   查詢預設 **30 / 45 / 60 / 90 天後出發、5 晚來回** 的最低價（可調整）。
+2. `monitor/flight_monitor.py` 透過 [fast-flights](https://github.com/AWeirdDev/flights) 直接查詢 **Google Flights**
+   （免費、不需要 API key），取預設 **30 / 45 / 60 / 90 天後出發、5 晚來回** 的最低價（可調整）。
 3. 每次結果寫入 `data/price_history.json` 並自動 commit，作為歷史紀錄。
 4. 比較兩個基準：**上一次查價**（前一天的價格）與 **歷史最低價**。
    任一艙等低於其中一個 → 寄 Email 通知（信中會標示 📉 降價幅度 / 🔥 歷史新低）。
@@ -17,22 +17,9 @@
 
 ## 一次性設定（必要）
 
-### 1. 取得 Amadeus API 金鑰（免費）
+查價本身不需要任何金鑰，唯一要設定的是寄信用的 Gmail。
 
-1. 到 <https://developers.amadeus.com> 註冊並登入。
-2. **My Self-Service Workspace → Create new app**，取得 `API Key` 與 `API Secret`。
-3. 到 GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**：
-
-| Secret 名稱 | 內容 |
-| --- | --- |
-| `AMADEUS_CLIENT_ID` | Amadeus API Key |
-| `AMADEUS_CLIENT_SECRET` | Amadeus API Secret |
-
-> 免費的 **test** 環境每月約 2,000 次呼叫（本專案每天約 12 次），
-> 但 test 環境資料為快取、非即時。若要真實報價，請在 Amadeus 申請 production 金鑰後，
-> 於 **Variables** 新增 `AMADEUS_ENV = production`。
-
-### 2. 設定 Gmail 寄信（Email 通知）
+### 設定 Gmail 寄信（Email 通知）
 
 通知信預設寄到 `anderson030323@gmail.com`，透過 Gmail SMTP 寄出，需要一組「應用程式密碼」：
 
@@ -66,6 +53,7 @@
 | `DAYS_AHEAD` | `30,45,60,90` | 取樣的出發日（距今天數，逗號分隔） |
 | `DEPARTURE_DATES` | 空 | 指定出發日期，例如 `2026-12-20,2026-12-27`（設定後會忽略 `DAYS_AHEAD`） |
 | `TRIP_NIGHTS` | `5` | 停留晚數；設 `0` 改查單程 |
+| `MAX_STOPS` | 空（不限） | 最多轉機次數；`0` = 只看直飛 |
 | `ADULTS` | `1` | 人數 |
 | `CURRENCY` | `TWD` | 幣別 |
 | `NOTIFY_ALWAYS` | `false` | 設 `true` 則每天都寄當日價格（不只降價時） |
@@ -80,7 +68,6 @@ Actions → **Daily TPE→DPS fare monitor → Run workflow**，
 
 ```bash
 pip install -r requirements.txt
-export AMADEUS_CLIENT_ID=... AMADEUS_CLIENT_SECRET=...
 python monitor/flight_monitor.py
 ```
 
@@ -90,3 +77,7 @@ python monitor/flight_monitor.py
 - 公開 repo 若 60 天沒有任何 commit，GitHub 會自動停用排程；本專案每天都會 commit 價格紀錄，所以不受影響。
 - 「歷史新低」是以本專案開始監控後的紀錄比較，第一次執行時三種艙等都會視為新低並通知一次。
 - 「上一次查價」指前一次成功執行的價格；價格持平或上漲時不通知，但仍會記錄在 Job Summary 與歷史檔。
+- 價格來自 Google Flights 搜尋結果頁，屬非官方介面。若 Google 改版導致查無資料，
+  程式會回報錯誤（Actions 會顯示紅色），此時更新 `fast-flights` 套件版本通常即可修復。
+  若 runner 被 Google 暫時封鎖，可在 Secrets 設 `GOOGLE_FLIGHTS_PROXY` 走代理。
+- 通知信中每個艙等都附上對應的 Google Flights 連結，可直接點開確認並訂票。
