@@ -303,13 +303,13 @@ def search_google_flights(cabin: str, dep: str, ret: str | None) -> list[Any]:
     return []
 
 
-def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> Fare | None:
-    """Pick the cheapest itinerary out of fast-flights results.
+def target_fares(results: list[Any], cabin: str, dep: str, ret: str | None) -> list[Fare]:
+    """Convert parsed itineraries to Fares, keeping only target-airline ones.
 
     For a round trip Google Flights lists outbound options priced as the full
     round-trip total, so ``price`` is already the total fare.
     """
-    best: Fare | None = None
+    fares: list[Fare] = []
     wanted = set(AIRLINES)
     for item in results:
         try:
@@ -326,20 +326,25 @@ def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> 
         for name in getattr(item, "airlines", []) or []:
             if name and name not in carriers:
                 carriers.append(str(name))
-        fare = Fare(
-            cabin=cabin,
-            price=price,
-            currency=CURRENCY,
-            departure_date=dep,
-            return_date=ret,
-            carriers=carriers,
-            stops_outbound=max(len(segments) - 1, 0),
-            stops_return=None,
-            checked_at=datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
+        fares.append(
+            Fare(
+                cabin=cabin,
+                price=price,
+                currency=CURRENCY,
+                departure_date=dep,
+                return_date=ret,
+                carriers=carriers,
+                stops_outbound=max(len(segments) - 1, 0),
+                stops_return=None,
+                checked_at=datetime.now(TAIPEI_TZ).isoformat(timespec="seconds"),
+            )
         )
-        if best is None or fare.price < best.price:
-            best = fare
-    return best
+    return fares
+
+
+def cheapest_fare(results: list[Any], cabin: str, dep: str, ret: str | None) -> Fare | None:
+    fares = target_fares(results, cabin, dep, ret)
+    return min(fares, key=lambda f: f.price) if fares else None
 
 
 # --------------------------------------------------------------------------- #
@@ -472,16 +477,23 @@ def main() -> int:
         print("Airlines: " + ", ".join(f"{c}({AIRLINE_NAMES.get(c, c)})" for c in AIRLINES))
 
     today_best: dict[str, Fare] = {}
+    # cabin -> airline label -> cheapest fare across all date pairs
+    by_airline: dict[str, dict[str, Fare]] = {cabin: {} for cabin in CABINS}
     for cabin in CABINS:
         for dep, ret in dates:
             results = search_google_flights(cabin, dep, ret)
-            fare = cheapest_fare(results, cabin, dep, ret)
+            fares = target_fares(results, cabin, dep, ret)
+            fare = min(fares, key=lambda f: f.price) if fares else None
             print(
                 f"    {CABINS[cabin]} {dep}→{ret}: {len(results)} 筆"
                 + (f"，目標航空最低 {fare.price:,.0f}（{'/'.join(fare.carriers)}）" if fare else "，目標航空無報價")
             )
             if fare and (cabin not in today_best or fare.price < today_best[cabin].price):
                 today_best[cabin] = fare
+            for f in fares:
+                label = "/".join(f.carriers) or "未知航空"
+                if label not in by_airline[cabin] or f.price < by_airline[cabin][label].price:
+                    by_airline[cabin][label] = f
             time.sleep(1.5)  # be gentle: avoid Google rate limiting
         if cabin in today_best:
             print("  " + today_best[cabin].summary())
@@ -548,6 +560,23 @@ def main() -> int:
         if last is not None and cabin not in drops:
             lines.append(f"   （上次查價 {fare.currency} {last:,.0f}）")
         lines.append(f"   查看/訂票：{google_flights_url(cabin, fare.departure_date, fare.return_date)}")
+    # Per-airline breakdown so the reader can see how the others compare.
+    lines += ["", "各航空最低價（跨所有日期組合）："]
+    for cabin in CABINS:
+        entries = sorted(by_airline[cabin].values(), key=lambda f: f.price)
+        if not entries:
+            lines.append(f"  {CABINS[cabin]}：目標航空皆無報價")
+            continue
+        lines.append(f"  {CABINS[cabin]}：")
+        for f in entries:
+            stops = "直飛" if f.stops_outbound == 0 else f"轉機 {f.stops_outbound} 次"
+            lines.append(
+                f"    - {'/'.join(f.carriers)}：{f.currency} {f.price:,.0f}"
+                f"（{f.departure_date} 出發 / {f.return_date} 回程，{stops}）"
+            )
+        missing = [AIRLINE_NAMES.get(c, c) for c in AIRLINES if not any(AIRLINE_NAMES.get(c, c) in k for k in by_airline[cabin])]
+        if missing:
+            lines.append(f"    - 無報價：{'、'.join(missing)}")
     lines += ["", f"資料來源：Google Flights（{len(dates)} 組日期，每艙等取目標航空最低）"]
     report = "\n".join(lines)
     print("\n" + report)
