@@ -1,65 +1,67 @@
 {
   "route": "TPE-DPS",
+  "criteria": "TPE-DPS|2027-02-02>2027-02-08;2027-02-02>2027-02-09;2027-02-03>2027-02-08;2027-02-03>2027-02-09|airlines=BR,CI,CX,JX,EK|adults=1|stops=|TWD",
   "lowest": {
     "ECONOMY": {
       "cabin": "ECONOMY",
-      "price": 10545.0,
+      "price": 17776.0,
       "currency": "TWD",
-      "departure_date": "2026-11-12",
-      "return_date": "2026-11-17",
+      "departure_date": "2027-02-02",
+      "return_date": "2027-02-08",
       "carriers": [
-        "酷航"
+        "國泰航空"
       ],
       "stops_outbound": 1,
       "stops_return": null,
-      "checked_at": "2026-09-13T17:00:25+08:00"
+      "checked_at": "2026-09-13T17:03:44+08:00"
     },
     "BUSINESS": {
       "cabin": "BUSINESS",
-      "price": 31546.0,
+      "price": 34400.0,
       "currency": "TWD",
-      "departure_date": "2026-10-28",
-      "return_date": "2026-11-02",
+      "departure_date": "2027-02-02",
+      "return_date": "2027-02-08",
       "carriers": [
-        "馬來西亞航空"
+        "國泰航空"
       ],
       "stops_outbound": 1,
       "stops_return": null,
-      "checked_at": "2026-09-13T17:00:38+08:00"
+      "checked_at": "2026-09-13T17:04:00+08:00"
     }
   },
   "runs": [
     {
       "date": "2026-09-13",
-      "checked_at": "2026-09-13T17:00:21+08:00",
+      "checked_at": "2026-09-13T17:03:44+08:00",
       "prices": {
         "ECONOMY": {
           "cabin": "ECONOMY",
-          "price": 10545.0,
+          "price": 17776.0,
           "currency": "TWD",
-          "departure_date": "2026-11-12",
-          "return_date": "2026-11-17",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
           "carriers": [
-            "酷航"
+            "國泰航空"
           ],
           "stops_outbound": 1,
           "stops_return": null,
-          "checked_at": "2026-09-13T17:00:25+08:00"
+          "checked_at": "2026-09-13T17:03:44+08:00"
         },
         "BUSINESS": {
           "cabin": "BUSINESS",
-          "price": 31546.0,
+          "price": 34400.0,
           "currency": "TWD",
-          "departure_date": "2026-10-28",
-          "return_date": "2026-11-02",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
           "carriers": [
-            "馬來西亞航空"
+            "國泰航空"
           ],
           "stops_outbound": 1,
           "stops_return": null,
-          "checked_at": "2026-09-13T17:00:38+08:00"
+          "checked_at": "2026-09-13T17:04:00+08:00"
         }
       }
     }
-  ]
+  ],
+  "previous_criteria": null
 }
