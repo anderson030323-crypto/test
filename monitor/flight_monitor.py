@@ -42,6 +42,8 @@ MAX_STOPS = os.getenv("MAX_STOPS", "")  # "" = any, "0" = direct only, "1" = up 
 NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() in {"1", "true", "yes"}
 # Optional HTTP(S) proxy for reaching Google Flights.
 GOOGLE_FLIGHTS_PROXY = os.getenv("GOOGLE_FLIGHTS_PROXY", "") or None
+# If set, raw HTML of pages that yield no results is saved here for debugging.
+DEBUG_DIR = os.getenv("DEBUG_DIR", "")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
@@ -129,9 +131,87 @@ def google_flights_url(cabin: str, dep: str, ret: str | None) -> str:
     return q.url()
 
 
+@dataclass
+class Itinerary:
+    """Minimal parsed Google Flights result (mirrors fast-flights' ``Flights``)."""
+
+    price: float
+    airlines: list[str]
+    flights: list[Any]  # segments; only the count is used
+
+
+def _dump_debug_html(html: str, tag: str) -> None:
+    if DEBUG_DIR:
+        Path(DEBUG_DIR).mkdir(parents=True, exist_ok=True)
+        (Path(DEBUG_DIR) / f"{tag}.html").write_text(html, encoding="utf-8")
+
+
+def parse_results_html(html: str, tag: str = "page") -> list[Itinerary]:
+    """Tolerant version of fast-flights' parser.
+
+    Google occasionally lists itineraries without a price (or with a
+    different nesting) and the upstream parser raises IndexError for the
+    whole page. Here each itinerary is parsed independently and unpriced
+    ones are skipped, so one odd entry never hides the rest.
+    """
+    from selectolax.lexbor import LexborHTMLParser
+
+    parser = LexborHTMLParser(html)
+    script = parser.css_first(r"script.ds\:1")
+    if script is None:
+        _dump_debug_html(html, f"{tag}-noscript")
+        return []
+    js = script.text()
+    if "data:" not in js:
+        _dump_debug_html(html, f"{tag}-nodata")
+        return []
+    data = js.split("data:", 1)[1].rsplit(",", 1)[0]
+    if data.endswith("errorHasStatus: true"):
+        return []  # Google says: no flights
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        _dump_debug_html(html, f"{tag}-badjson")
+        return []
+
+    # Airline code -> name lookup (best effort)
+    names: dict[str, str] = {}
+    try:
+        for code, name in payload[7][1][1]:
+            names[str(code)] = str(name)
+    except (IndexError, TypeError, ValueError):
+        pass
+
+    # Google splits results into "best" and "other" groups; scan every group.
+    groups: list[Any] = []
+    for idx in (3, 2):
+        try:
+            grp = payload[idx][0]
+        except (IndexError, TypeError):
+            continue
+        if isinstance(grp, list):
+            groups.append(grp)
+
+    results: list[Itinerary] = []
+    for grp in groups:
+        for entry in grp:
+            try:
+                flight = entry[0]
+                price = float(entry[1][0][1])
+                airlines = [names.get(str(a), str(a)) for a in (flight[1] or [])]
+                segments = list(flight[2] or [])
+            except (IndexError, TypeError, ValueError, KeyError):
+                continue  # unpriced or unexpected entry -> skip
+            if price > 0:
+                results.append(Itinerary(price=price, airlines=airlines, flights=segments))
+    if not results and groups:
+        _dump_debug_html(html, f"{tag}-empty")
+    return results
+
+
 def search_google_flights(cabin: str, dep: str, ret: str | None) -> list[Any]:
-    """Return fast-flights ``Flights`` results for one cabin / date pair."""
-    from fast_flights import FlightQuery, FlightsNotFound, Passengers, create_query, get_flights
+    """Return parsed itineraries for one cabin / date pair."""
+    from fast_flights import FlightQuery, Passengers, create_query, fetch_flights_html
 
     legs = [FlightQuery(date=dep, from_airport=ORIGIN, to_airport=DESTINATION)]
     if ret:
@@ -145,16 +225,22 @@ def search_google_flights(cabin: str, dep: str, ret: str | None) -> list[Any]:
         currency=CURRENCY,
         max_stops=int(MAX_STOPS) if MAX_STOPS else None,
     )
+    tag = f"{cabin}-{dep}"
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            return list(get_flights(query, proxy=GOOGLE_FLIGHTS_PROXY))
-        except FlightsNotFound:
-            return []
-        except Exception as exc:  # network / parse hiccup: retry with backoff
+            html = fetch_flights_html(query, proxy=GOOGLE_FLIGHTS_PROXY)
+        except Exception as exc:  # network hiccup: retry with backoff
             last_exc = exc
             time.sleep(3 * (attempt + 1))
-    print(f"  [warn] Google Flights 查詢失敗 {cabin} {dep}: {last_exc}")
+            continue
+        try:
+            return parse_results_html(html, tag)
+        except Exception as exc:  # unexpected page shape: keep the evidence
+            _dump_debug_html(html, f"{tag}-parseerror")
+            print(f"  [warn] 解析失敗 {cabin} {dep}: {type(exc).__name__}: {exc}")
+            return []
+    print(f"  [warn] Google Flights 連線失敗 {cabin} {dep}: {last_exc}")
     return []
 
 

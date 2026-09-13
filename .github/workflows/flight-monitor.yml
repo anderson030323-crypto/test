@@ -39,6 +39,7 @@ jobs:
           # Prices come from Google Flights via fast-flights; no API key needed.
           MAX_STOPS: ${{ vars.MAX_STOPS || '' }}
           GOOGLE_FLIGHTS_PROXY: ${{ secrets.GOOGLE_FLIGHTS_PROXY }}
+          DEBUG_DIR: debug-html
           ORIGIN: ${{ vars.ORIGIN || 'TPE' }}
           DESTINATION: ${{ vars.DESTINATION || 'DPS' }}
           CURRENCY: ${{ vars.CURRENCY || 'TWD' }}
@@ -60,6 +61,15 @@ jobs:
           NOTIFY_EMAIL_TO: ${{ vars.NOTIFY_EMAIL_TO || 'anderson030323@gmail.com' }}
         run: python monitor/flight_monitor.py
 
+      - name: Upload debug HTML (pages that yielded no results)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-html
+          path: debug-html/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Commit price history
         if: always()
         run: |
@@ -68,7 +78,16 @@ jobs:
           git add data/price_history.json
           if git diff --cached --quiet; then
             echo "No history changes."
-          else
-            git commit -m "chore: record fares $(TZ=Asia/Taipei date +%F)"
-            git push
+            exit 0
           fi
+          git commit -m "chore: record fares $(TZ=Asia/Taipei date +%F)"
+          # GitHub occasionally rejects a push transiently; retry a few times.
+          for i in 1 2 3 4; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            if git push origin HEAD:"${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "push failed (attempt $i), retrying..."
+            sleep $((i * 10))
+          done
+          exit 1
