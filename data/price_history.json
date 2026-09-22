@@ -1392,6 +1392,149 @@
           }
         }
       }
+    },
+    {
+      "date": "2026-09-22",
+      "checked_at": "2026-09-22T09:06:32+08:00",
+      "prices": {
+        "ECONOMY": {
+          "cabin": "ECONOMY",
+          "price": 17811.0,
+          "currency": "TWD",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-09",
+          "carriers": [
+            "國泰航空"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-09-22T09:06:34+08:00"
+        },
+        "BUSINESS": {
+          "cabin": "BUSINESS",
+          "price": 34441.0,
+          "currency": "TWD",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
+          "carriers": [
+            "國泰航空"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-09-22T09:06:48+08:00"
+        }
+      },
+      "by_airline": {
+        "ECONOMY": {
+          "國泰航空": {
+            "cabin": "ECONOMY",
+            "price": 17811.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-09",
+            "carriers": [
+              "國泰航空"
+            ],
+            "stops_outbound": 1,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:34+08:00"
+          },
+          "星宇航空": {
+            "cabin": "ECONOMY",
+            "price": 30989.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "星宇航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:33+08:00"
+          },
+          "中華航空": {
+            "cabin": "ECONOMY",
+            "price": 31025.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "中華航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:33+08:00"
+          },
+          "長榮航空": {
+            "cabin": "ECONOMY",
+            "price": 31025.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "長榮航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:33+08:00"
+          }
+        },
+        "BUSINESS": {
+          "國泰航空": {
+            "cabin": "BUSINESS",
+            "price": 34441.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "國泰航空"
+            ],
+            "stops_outbound": 1,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:48+08:00"
+          },
+          "長榮航空": {
+            "cabin": "BUSINESS",
+            "price": 54501.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "長榮航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:48+08:00"
+          },
+          "中華航空": {
+            "cabin": "BUSINESS",
+            "price": 83801.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "中華航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:48+08:00"
+          },
+          "中華航空/國泰航空": {
+            "cabin": "BUSINESS",
+            "price": 124264.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-03",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "中華航空",
+              "國泰航空"
+            ],
+            "stops_outbound": 1,
+            "stops_return": null,
+            "checked_at": "2026-09-22T09:06:52+08:00"
+          }
+        }
+      }
     }
   ],
   "previous_criteria": null
