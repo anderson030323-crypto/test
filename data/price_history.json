@@ -4,16 +4,16 @@
   "lowest": {
     "ECONOMY": {
       "cabin": "ECONOMY",
-      "price": 16776.0,
+      "price": 16096.0,
       "currency": "TWD",
       "departure_date": "2027-02-02",
       "return_date": "2027-02-08",
       "carriers": [
-        "國泰航空"
+        "星宇航空"
       ],
-      "stops_outbound": 1,
+      "stops_outbound": 0,
       "stops_return": null,
-      "checked_at": "2026-09-13T17:44:07+08:00"
+      "checked_at": "2026-10-28T14:35:10+08:00"
     },
     "BUSINESS": {
       "cabin": "BUSINESS",
@@ -6063,6 +6063,135 @@
             "stops_outbound": 0,
             "stops_return": null,
             "checked_at": "2026-10-27T13:55:59+08:00"
+          }
+        }
+      }
+    },
+    {
+      "date": "2026-10-28",
+      "checked_at": "2026-10-28T14:35:09+08:00",
+      "prices": {
+        "ECONOMY": {
+          "cabin": "ECONOMY",
+          "price": 16096.0,
+          "currency": "TWD",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
+          "carriers": [
+            "星宇航空"
+          ],
+          "stops_outbound": 0,
+          "stops_return": null,
+          "checked_at": "2026-10-28T14:35:10+08:00"
+        },
+        "BUSINESS": {
+          "cabin": "BUSINESS",
+          "price": 32398.0,
+          "currency": "TWD",
+          "departure_date": "2027-02-02",
+          "return_date": "2027-02-08",
+          "carriers": [
+            "國泰航空"
+          ],
+          "stops_outbound": 1,
+          "stops_return": null,
+          "checked_at": "2026-10-28T14:35:25+08:00"
+        }
+      },
+      "by_airline": {
+        "ECONOMY": {
+          "國泰航空": {
+            "cabin": "ECONOMY",
+            "price": 22130.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "國泰航空"
+            ],
+            "stops_outbound": 1,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:10+08:00"
+          },
+          "中華航空": {
+            "cabin": "ECONOMY",
+            "price": 31431.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "中華航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:10+08:00"
+          },
+          "長榮航空": {
+            "cabin": "ECONOMY",
+            "price": 31431.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "長榮航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:10+08:00"
+          },
+          "星宇航空": {
+            "cabin": "ECONOMY",
+            "price": 16096.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "星宇航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:10+08:00"
+          }
+        },
+        "BUSINESS": {
+          "國泰航空": {
+            "cabin": "BUSINESS",
+            "price": 32398.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "國泰航空"
+            ],
+            "stops_outbound": 1,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:25+08:00"
+          },
+          "中華航空": {
+            "cabin": "BUSINESS",
+            "price": 116845.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "中華航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:25+08:00"
+          },
+          "長榮航空": {
+            "cabin": "BUSINESS",
+            "price": 117345.0,
+            "currency": "TWD",
+            "departure_date": "2027-02-02",
+            "return_date": "2027-02-08",
+            "carriers": [
+              "長榮航空"
+            ],
+            "stops_outbound": 0,
+            "stops_return": null,
+            "checked_at": "2026-10-28T14:35:25+08:00"
           }
         }
       }
