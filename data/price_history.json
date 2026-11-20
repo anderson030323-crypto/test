@@ -9185,6 +9185,12 @@
           }
         }
       }
+    },
+    {
+      "date": "2026-11-20",
+      "checked_at": "2026-11-20T15:59:53+08:00",
+      "prices": {},
+      "by_airline": {}
     }
   ],
   "previous_criteria": null
