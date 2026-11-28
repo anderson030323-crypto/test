@@ -9893,6 +9893,12 @@
           }
         }
       }
+    },
+    {
+      "date": "2026-11-28",
+      "checked_at": "2026-11-28T16:38:50+08:00",
+      "prices": {},
+      "by_airline": {}
     }
   ],
   "previous_criteria": null
